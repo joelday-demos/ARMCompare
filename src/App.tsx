@@ -7,12 +7,14 @@ import { diffTemplates, buildDiffMap } from './utils/templateDiff';
 import FileUpload from './components/FileUpload';
 import DependencyGraph from './components/DependencyGraph';
 import DiffLegend from './components/DiffLegend';
+import RawTemplateViewer from './components/RawTemplateViewer';
 import sampleTemplates from './data/sampleTemplates.json';
 
 type ViewMode = 'single' | 'compare';
 
 interface LoadedTemplate {
   template: ArmTemplate;
+  rawText: string;
   fileName: string;
   resources: ParsedResource[];
   edges: { from: string; to: string }[];
@@ -23,6 +25,7 @@ function App() {
   const [template1, setTemplate1] = useState<LoadedTemplate | null>(null);
   const [template2, setTemplate2] = useState<LoadedTemplate | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [controlsCollapsed, setControlsCollapsed] = useState(false);
 
   const loadTemplate = useCallback(
     (content: string, fileName: string): LoadedTemplate | null => {
@@ -35,7 +38,7 @@ function App() {
         setError(null);
         const resources = parseTemplate(parsed);
         const edges = resolveDependencies(resources);
-        return { template: parsed, fileName, resources, edges };
+        return { template: parsed, rawText: content, fileName, resources, edges };
       } catch {
         setError(`Failed to parse "${fileName}". Ensure it is valid JSON.`);
         return null;
@@ -100,80 +103,125 @@ function App() {
 
   const activeTemplate = template1;
   const showGraph = mode === 'single' ? !!activeTemplate : !!(template1 && template2);
+  const isTopCollapsed = controlsCollapsed && showGraph;
 
   return (
     <div className="app">
-      <header className="app-header">
-        <div className="header-left">
-          <h1>
-            <span className="logo-icon">🔀</span>
-            ARM Template Visualizer
-          </h1>
-          <p className="subtitle">
-            Visualize Azure Resource Manager template dependencies
-          </p>
-        </div>
-        <div className="header-right">
-          <div className="mode-toggle">
-            <button
-              className={`mode-btn ${mode === 'single' ? 'active' : ''}`}
-              onClick={() => setMode('single')}
-            >
-              📊 Visualize
-            </button>
-            <button
-              className={`mode-btn ${mode === 'compare' ? 'active' : ''}`}
-              onClick={() => setMode('compare')}
-            >
-              🔍 Compare
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {error && (
-        <div className="error-banner">
-          <span>⚠️ {error}</span>
-          <button onClick={() => setError(null)}>✕</button>
+      {isTopCollapsed && (
+        <div className="collapsed-controls-bar">
+          <span className="collapsed-controls-label">Controls hidden for focus view</span>
+          <button
+            className="collapse-toggle-btn"
+            onClick={() => setControlsCollapsed(false)}
+            type="button"
+          >
+            ▾ Expand Controls
+          </button>
         </div>
       )}
 
-      <div className="upload-section">
-        <div className="upload-row">
-          <FileUpload
-            label={mode === 'compare' ? 'Base Template (left)' : 'ARM Template'}
-            onFileLoaded={handleTemplate1}
-            fileName={template1?.fileName}
-            onClear={() => setTemplate1(null)}
-          />
-          {mode === 'compare' && (
-            <FileUpload
-              label="Updated Template (right)"
-              onFileLoaded={handleTemplate2}
-              fileName={template2?.fileName}
-              onClear={() => setTemplate2(null)}
-            />
-          )}
-        </div>
-
-        {!showGraph && (
-          <div className="samples-section">
-            <p className="samples-label">Or try a sample template:</p>
-            <div className="sample-buttons">
-              {sampleTemplates.map((sample, i) => (
-                <button
-                  key={i}
-                  className="sample-btn"
-                  onClick={() => loadSample(i, !template1 ? 1 : 2)}
-                >
-                  {sample.name}
-                  <span className="sample-desc">{sample.description}</span>
-                </button>
-              ))}
+      {!isTopCollapsed && (
+        <>
+          <header className="app-header">
+            <div className="header-left">
+              <h1>
+                <span className="logo-icon">🔀</span>
+                ARM Template Visualizer
+              </h1>
+              <p className="subtitle">
+                Visualize Azure Resource Manager template dependencies
+              </p>
             </div>
+            <div className="header-right">
+              <div className="mode-toggle">
+                <button
+                  className={`mode-btn ${mode === 'single' ? 'active' : ''}`}
+                  onClick={() => setMode('single')}
+                >
+                  📊 Visualize
+                </button>
+                <button
+                  className={`mode-btn ${mode === 'compare' ? 'active' : ''}`}
+                  onClick={() => setMode('compare')}
+                >
+                  🔍 Compare
+                </button>
+              </div>
+
+              {showGraph && (
+                <button
+                  className="collapse-toggle-btn"
+                  onClick={() => setControlsCollapsed(true)}
+                  type="button"
+                >
+                  ▴ Collapse Controls
+                </button>
+              )}
+            </div>
+          </header>
+
+          {error && (
+            <div className="error-banner">
+              <span>⚠️ {error}</span>
+              <button onClick={() => setError(null)}>✕</button>
+            </div>
+          )}
+
+          <div className="upload-section">
+            <div className="upload-row">
+              <FileUpload
+                label={mode === 'compare' ? 'Base Template (left)' : 'ARM Template'}
+                onFileLoaded={handleTemplate1}
+                fileName={template1?.fileName}
+                onClear={() => setTemplate1(null)}
+              />
+              {mode === 'compare' && (
+                <FileUpload
+                  label="Updated Template (right)"
+                  onFileLoaded={handleTemplate2}
+                  fileName={template2?.fileName}
+                  onClear={() => setTemplate2(null)}
+                />
+              )}
+            </div>
+
+            {!showGraph && (
+              <div className="samples-section">
+                <p className="samples-label">Or try a sample template:</p>
+                <div className="sample-buttons">
+                  {sampleTemplates.map((sample, i) => (
+                    <button
+                      key={i}
+                      className="sample-btn"
+                      onClick={() => loadSample(i, !template1 ? 1 : 2)}
+                    >
+                      {sample.name}
+                      <span className="sample-desc">{sample.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(template1 || (mode === 'compare' && template2)) && (
+              <div className={`raw-templates-grid ${mode === 'compare' ? 'compare' : ''}`}>
+                {template1 && (
+                  <RawTemplateViewer
+                    title={mode === 'compare' ? `Base: ${template1.fileName}` : template1.fileName}
+                    rawText={template1.rawText}
+                  />
+                )}
+                {mode === 'compare' && template2 && (
+                  <RawTemplateViewer
+                    title={`Updated: ${template2.fileName}`}
+                    rawText={template2.rawText}
+                  />
+                )}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
       {showGraph && (
         <div className="visualization">
