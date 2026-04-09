@@ -10,7 +10,6 @@ permissions:
   contents: read
   pull-requests: write
 
-  
 env:
   RESOURCE_GROUP_NAME: arm-compare-rg
   LOCATION: eastus2
@@ -119,6 +118,7 @@ jobs:
           set -euo pipefail
           python <<'PY'
           import json
+          import os
           from pathlib import Path
 
           marker = "<!-- armcompare-whatif-comment -->"

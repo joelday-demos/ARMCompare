@@ -1,6 +1,6 @@
 // Example: replace with your real logic
 
-const fs = require('fs');
+import fs from 'node:fs';
 
 // You can parse what-if output if needed
 const whatIf = JSON.parse(fs.readFileSync('whatif.json', 'utf8'));
