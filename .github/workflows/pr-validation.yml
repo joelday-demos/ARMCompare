@@ -1,0 +1,130 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  what-if:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout repository files so the workflow can access infra/main.bicep.
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Authenticate to Azure using OIDC (no client secret required).
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Ensure the Bicep CLI is available in Azure CLI for reliable template compilation.
+      - name: Ensure Bicep CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          az bicep install --only-show-errors
+
+      # Run what-if against the target resource group and capture raw JSON output.
+      - name: Run what-if (JSON output)
+        id: whatif
+        shell: bash
+        run: |
+          set -euo pipefail
+          az deployment group what-if \
+            --resource-group my-rg \
+            --template-file infra/main.bicep \
+            --result-format FullResourcePayloads \
+            --no-pretty-print \
+            --output json > whatif.json
+
+          # Expose the raw output path for later steps.
+          echo "whatif_path=whatif.json" >> "$GITHUB_OUTPUT"
+
+      # Convert what-if output into a readable markdown block for PR feedback.
+      - name: Build PR comment markdown
+        id: comment_body
+        shell: bash
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          import json
+          from pathlib import Path
+
+          marker = "<!-- armcompare-whatif-comment -->"
+          raw_path = Path("whatif.json")
+          data = json.loads(raw_path.read_text(encoding="utf-8"))
+
+          formatted = json.dumps(data, indent=2)
+          max_chars = 60000
+          truncated = False
+          if len(formatted) > max_chars:
+            formatted = formatted[:max_chars] + "\n... (truncated)"
+            truncated = True
+
+          summary = [
+            marker,
+            "## Azure What-If (infra/main.bicep)",
+            "",
+            "Resource Group: `my-rg`",
+            f"Truncated: `{'yes' if truncated else 'no'}`",
+            "",
+            "```json",
+            formatted,
+            "```",
+          ]
+
+          body = "\n".join(summary)
+          out = Path("comment-body.md")
+          out.write_text(body, encoding="utf-8")
+          print(f"comment_file={out}")
+          PY
+
+          echo "comment_file=comment-body.md" >> "$GITHUB_OUTPUT"
+
+      # Create or update a single bot comment so PR discussions stay clean.
+      - name: Upsert PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- armcompare-whatif-comment -->';
+            const body = fs.readFileSync('${{ steps.comment_body.outputs.comment_file }}', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            });
+
+            const existing = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+              core.info(`Updated existing what-if comment (${existing.id}).`);
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body
+              });
+              core.info('Created new what-if comment.');
+            }

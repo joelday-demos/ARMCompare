@@ -3,8 +3,23 @@ import type { ParsedResource, DiffResult, DiffStatus, PropertyChange } from '../
 /**
  * Build a match key for a resource: type/name (lowercased).
  */
+function normalizeResourceName(name: string): string {
+  const value = name.trim().toLowerCase();
+
+  const armParameters = value.match(/^parameters\('\s*([^']+)\s*'\)$/);
+  if (armParameters) return armParameters[1].replace(/[^a-z0-9]/g, '');
+
+  const armVariables = value.match(/^variables\('\s*([^']+)\s*'\)$/);
+  if (armVariables) return armVariables[1].replace(/[^a-z0-9]/g, '');
+
+  const singleQuoted = value.match(/^'([^']+)'$/);
+  if (singleQuoted) return singleQuoted[1].replace(/[^a-z0-9]/g, '');
+
+  return value.replace(/[^a-z0-9]/g, '');
+}
+
 function matchKey(resource: ParsedResource): string {
-  return `${resource.type}/${resource.name}`.toLowerCase();
+  return `${resource.type.toLowerCase()}/${normalizeResourceName(resource.name)}`;
 }
 
 /**

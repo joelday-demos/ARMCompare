@@ -1,0 +1,102 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP_NAME: my-rg
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: prod
+
+    steps:
+      # Checkout repository files needed for infra + application deployment.
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Install Node.js to build the frontend application.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Authenticate to Azure using OIDC (no client secret required).
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Make sure Bicep is available for deployment commands.
+      - name: Ensure Bicep CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          az bicep install --only-show-errors
+
+      # Deploy infrastructure and capture full deployment result JSON.
+      - name: Deploy infrastructure
+        id: infra
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP_NAME" \
+            --name "armcompare-prod-${GITHUB_RUN_ID}" \
+            --template-file infra/main.bicep \
+            --output json > deployment-result.json
+
+          # Persist deployment outputs for downstream steps.
+          webAppName=$(jq -r '.properties.outputs.webAppName.value // empty' deployment-result.json)
+
+          if [[ -z "$webAppName" ]]; then
+            echo "Deployment outputs:" >&2
+            cat deployment-result.json >&2
+            echo "Expected output webAppName was not found." >&2
+            exit 1
+          fi
+
+          echo "web_app_name=$webAppName" >> "$GITHUB_OUTPUT"
+
+      # Build the Node.js app so we can deploy production assets.
+      - name: Build application
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install
+          npm run build
+
+      # Package built files for zip deploy.
+      - name: Package build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -d dist ]]; then
+            echo "dist directory was not found after build." >&2
+            exit 1
+          fi
+          cd dist
+          zip -r ../app.zip .
+
+      # Deploy the packaged app to the Web App resolved from infra outputs.
+      - name: Deploy application
+        shell: bash
+        run: |
+          set -euo pipefail
+          az webapp deploy \
+            --resource-group "$RESOURCE_GROUP_NAME" \
+            --name "${{ steps.infra.outputs.web_app_name }}" \
+            --src-path app.zip \
+            --type zip \
+            --clean true

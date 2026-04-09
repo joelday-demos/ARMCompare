@@ -5,6 +5,7 @@ interface FileUploadProps {
   onFileLoaded: (content: string, fileName: string) => void;
   accept?: string;
   fileName?: string;
+  fileTypeLabel?: string;
   onClear?: () => void;
 }
 
@@ -13,10 +14,12 @@ export default function FileUpload({
   onFileLoaded,
   accept = '.json',
   fileName,
+  fileTypeLabel,
   onClear,
 }: FileUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
+  const supportsBicep = accept.toLowerCase().includes('.bicep');
 
   const handleFile = useCallback(
     (file: File) => {
@@ -71,7 +74,10 @@ export default function FileUpload({
           <span className="file-icon">📄</span>
           <div className="file-info">
             <span className="file-label">{label}</span>
-            <span className="file-name">{fileName}</span>
+            <span className="file-name-row">
+              <span className="file-name">{fileName}</span>
+              {fileTypeLabel && <span className="file-type-badge">{fileTypeLabel}</span>}
+            </span>
           </div>
           {onClear && (
             <button
@@ -91,7 +97,11 @@ export default function FileUpload({
         <div className="upload-prompt">
           <span className="upload-icon">⬆</span>
           <span className="upload-label">{label}</span>
-          <span className="upload-hint">Drop a JSON file or click to browse</span>
+          <span className="upload-hint">
+            {supportsBicep
+              ? 'Drop a JSON or .bicep file or click to browse'
+              : 'Drop a JSON file or click to browse'}
+          </span>
         </div>
       )}
     </div>

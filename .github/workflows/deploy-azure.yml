@@ -1,0 +1,72 @@
+name: Deploy ARMCompare To Azure
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP_NAME: ${{ vars.AZURE_RESOURCE_GROUP }}
+  STORAGE_ACCOUNT_NAME: ${{ vars.AZURE_STORAGE_ACCOUNT }}
+  AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'eastus' }}
+  AZURE_TEMPLATE_TYPE: ${{ vars.AZURE_TEMPLATE_TYPE || 'arm' }}
+  AZURE_TEMPLATE_FILE: ${{ vars.AZURE_TEMPLATE_FILE }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Validate Required Variables
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace("${{ env.RESOURCE_GROUP_NAME }}")) {
+            throw "Repository variable AZURE_RESOURCE_GROUP is required."
+          }
+          if ([string]::IsNullOrWhiteSpace("${{ env.STORAGE_ACCOUNT_NAME }}")) {
+            throw "Repository variable AZURE_STORAGE_ACCOUNT is required."
+          }
+
+      - name: Deploy To Azure (ARM + Static Website Upload)
+        shell: pwsh
+        run: |
+          $templateFile = "${{ env.AZURE_TEMPLATE_FILE }}"
+
+          if ([string]::IsNullOrWhiteSpace($templateFile)) {
+            ./scripts/deploy-azure-ci.ps1 `
+              -ResourceGroupName "${{ env.RESOURCE_GROUP_NAME }}" `
+              -StorageAccountName "${{ env.STORAGE_ACCOUNT_NAME }}" `
+              -Location "${{ env.AZURE_LOCATION }}" `
+              -TemplateType "${{ env.AZURE_TEMPLATE_TYPE }}"
+          }
+          else {
+            ./scripts/deploy-azure-ci.ps1 `
+              -ResourceGroupName "${{ env.RESOURCE_GROUP_NAME }}" `
+              -StorageAccountName "${{ env.STORAGE_ACCOUNT_NAME }}" `
+              -Location "${{ env.AZURE_LOCATION }}" `
+              -TemplateType "${{ env.AZURE_TEMPLATE_TYPE }}" `
+              -TemplateFile $templateFile
+          }

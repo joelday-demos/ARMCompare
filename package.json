@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy:azure": "pwsh -File ./scripts/deploy-azure-static-site.ps1",
+    "generate:arm": "pwsh -File ./scripts/generate-arm-template.ps1 -WriteSampleParameters",
+    "deploy:ci": "pwsh -File ./scripts/deploy-azure-ci.ps1"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",

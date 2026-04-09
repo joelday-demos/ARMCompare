@@ -3,6 +3,7 @@ import './App.css';
 
 import type { ArmTemplate, ParsedResource, DiffResult } from './types/arm';
 import { parseTemplate, resolveDependencies, validateTemplate } from './utils/armParser';
+import { parseBicepTemplate } from './utils/bicepParser';
 import { diffTemplates, buildDiffMap } from './utils/templateDiff';
 import FileUpload from './components/FileUpload';
 import DependencyGraph from './components/DependencyGraph';
@@ -13,11 +14,12 @@ import sampleTemplates from './data/sampleTemplates.json';
 type ViewMode = 'single' | 'compare';
 
 interface LoadedTemplate {
-  template: ArmTemplate;
+  template?: ArmTemplate;
   rawText: string;
   fileName: string;
   resources: ParsedResource[];
   edges: { from: string; to: string }[];
+  sourceFormat: 'arm' | 'bicep';
 }
 
 function App() {
@@ -29,6 +31,29 @@ function App() {
 
   const loadTemplate = useCallback(
     (content: string, fileName: string): LoadedTemplate | null => {
+      const lowerFileName = fileName.toLowerCase();
+
+      if (lowerFileName.endsWith('.bicep')) {
+        try {
+          const { resources, edges } = parseBicepTemplate(content);
+          if (resources.length === 0) {
+            setError(`No resources were found in "${fileName}". Ensure the Bicep file declares resources.`);
+            return null;
+          }
+          setError(null);
+          return {
+            fileName,
+            rawText: content,
+            resources,
+            edges,
+            sourceFormat: 'bicep',
+          };
+        } catch {
+          setError(`Failed to parse "${fileName}". Ensure it is valid Bicep syntax.`);
+          return null;
+        }
+      }
+
       try {
         const parsed = JSON.parse(content);
         if (!validateTemplate(parsed)) {
@@ -38,9 +63,16 @@ function App() {
         setError(null);
         const resources = parseTemplate(parsed);
         const edges = resolveDependencies(resources);
-        return { template: parsed, rawText: content, fileName, resources, edges };
+        return {
+          template: parsed,
+          rawText: content,
+          fileName,
+          resources,
+          edges,
+          sourceFormat: 'arm',
+        };
       } catch {
-        setError(`Failed to parse "${fileName}". Ensure it is valid JSON.`);
+        setError(`Failed to parse "${fileName}". Upload a valid ARM JSON or .bicep file.`);
         return null;
       }
     },
@@ -126,10 +158,10 @@ function App() {
             <div className="header-left">
               <h1>
                 <span className="logo-icon">🔀</span>
-                ARM Template Visualizer
+                ARM/Bicep Template Visualizer
               </h1>
               <p className="subtitle">
-                Visualize Azure Resource Manager template dependencies
+                Visualize Azure ARM JSON and Bicep resource dependencies
               </p>
             </div>
             <div className="header-right">
@@ -170,20 +202,30 @@ function App() {
           <div className="upload-section">
             <div className="upload-row">
               <FileUpload
-                label={mode === 'compare' ? 'Base Template (left)' : 'ARM Template'}
+                label={mode === 'compare' ? 'Base Template (left)' : 'Template (ARM/Bicep)'}
                 onFileLoaded={handleTemplate1}
+                accept=".json,.bicep"
                 fileName={template1?.fileName}
+                fileTypeLabel={template1 ? template1.sourceFormat.toUpperCase() : undefined}
                 onClear={() => setTemplate1(null)}
               />
               {mode === 'compare' && (
                 <FileUpload
                   label="Updated Template (right)"
                   onFileLoaded={handleTemplate2}
+                  accept=".json,.bicep"
                   fileName={template2?.fileName}
+                  fileTypeLabel={template2 ? template2.sourceFormat.toUpperCase() : undefined}
                   onClear={() => setTemplate2(null)}
                 />
               )}
             </div>
+
+            {mode === 'compare' && template1 && template2 && template1.sourceFormat !== template2.sourceFormat && (
+              <div className="comparison-mode-note">
+                Comparing across formats: {template1.sourceFormat.toUpperCase()} vs {template2.sourceFormat.toUpperCase()}
+              </div>
+            )}
 
             {!showGraph && (
               <div className="samples-section">
@@ -249,11 +291,11 @@ function App() {
       {!showGraph && (
         <div className="empty-state">
           <div className="empty-icon">📋</div>
-          <h2>Upload an ARM Template to get started</h2>
+          <h2>Upload a Template to get started</h2>
           <p>
             {mode === 'single'
-              ? 'Drop a JSON ARM template file above to visualize its resource dependency tree.'
-              : 'Upload two ARM template files to compare the resources and see what changed.'}
+              ? 'Drop an ARM JSON or .bicep template file above to visualize its resource dependency tree.'
+              : 'Upload two ARM JSON or .bicep files to compare resources and see what changed.'}
           </p>
         </div>
       )}
