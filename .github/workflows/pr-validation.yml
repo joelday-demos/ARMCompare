@@ -10,6 +10,9 @@ permissions:
   contents: read
   pull-requests: write
 
+env:
+  RESOURCE_GROUP_NAME: arm-compare-rg
+
 jobs:
   what-if:
     runs-on: ubuntu-latest
@@ -41,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           az deployment group what-if \
-            --resource-group my-rg \
+            --resource-group "$RESOURCE_GROUP_NAME" \
             --template-file infra/main.bicep \
             --result-format FullResourcePayloads \
             --no-pretty-print \
@@ -75,7 +78,7 @@ jobs:
             marker,
             "## Azure What-If (infra/main.bicep)",
             "",
-            "Resource Group: `my-rg`",
+            f"Resource Group: `{os.environ.get('RESOURCE_GROUP_NAME', 'unknown')}`",
             f"Truncated: `{'yes' if truncated else 'no'}`",
             "",
             "```json",
