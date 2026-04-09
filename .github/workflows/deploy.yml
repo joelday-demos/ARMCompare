@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  RESOURCE_GROUP_NAME: my-rg
+  RESOURCE_GROUP_NAME: arm-compare-rg
 
 jobs:
   deploy:

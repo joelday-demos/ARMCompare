@@ -10,6 +10,10 @@ permissions:
   contents: read
   pull-requests: write
 
+env:
+  RESOURCE_GROUP_NAME: arm-compare-rg
+  LOCATION: eastus2
+
 jobs:
   what-if:
     runs-on: ubuntu-latest
@@ -26,6 +30,12 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Ensure resource group exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          az group create --name "$RESOURCE_GROUP_NAME" --location "$LOCATION" --only-show-errors
 
       # Ensure the Bicep CLI is available in Azure CLI for reliable template compilation.
       - name: Ensure Bicep CLI
@@ -41,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           az deployment group what-if \
-            --resource-group my-rg \
+            --resource-group "$RESOURCE_GROUP_NAME" \
             --template-file infra/main.bicep \
             --result-format FullResourcePayloads \
             --no-pretty-print \
@@ -50,6 +60,56 @@ jobs:
           # Expose the raw output path for later steps.
           echo "whatif_path=whatif.json" >> "$GITHUB_OUTPUT"
 
+      - name: Run Cost Analysis
+        id: cost
+        run: |
+            COST=$(node scripts/cost-check.js)
+            echo "cost=$COST" >> $GITHUB_OUTPUT
+            echo "Estimated cost: $COST"
+
+      - name: Add/Remove Cost Label
+        uses: actions/github-script@v7
+        env:
+            COST: ${{ steps.cost.outputs.cost }}
+            THRESHOLD: 100
+        with:
+          script: |
+            const cost = parseFloat(process.env.COST);
+            const threshold = parseFloat(process.env.THRESHOLD);
+
+            const label = 'high-cost';
+            const issue_number = context.issue.number;
+
+            // Get existing labels
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              ...context.repo,
+              issue_number
+            });
+
+            const hasLabel = labels.some(l => l.name === label);
+
+            if (cost > threshold) {
+              core.info(`Cost ${cost} exceeds threshold ${threshold}`);
+
+              if (!hasLabel) {
+                await github.rest.issues.addLabels({
+                  ...context.repo,
+                  issue_number,
+                  labels: [label]
+                });
+              }
+            } else {
+              core.info(`Cost ${cost} is below threshold ${threshold}`);
+
+              if (hasLabel) {
+                await github.rest.issues.removeLabel({
+                  ...context.repo,
+                  issue_number,
+                  name: label
+                });
+              }
+            }
+          
       # Convert what-if output into a readable markdown block for PR feedback.
       - name: Build PR comment markdown
         id: comment_body
@@ -58,6 +118,7 @@ jobs:
           set -euo pipefail
           python <<'PY'
           import json
+          import os
           from pathlib import Path
 
           marker = "<!-- armcompare-whatif-comment -->"
@@ -75,12 +136,16 @@ jobs:
             marker,
             "## Azure What-If (infra/main.bicep)",
             "",
-            "Resource Group: `my-rg`",
+            f"Resource Group: `{os.environ.get('RESOURCE_GROUP_NAME', 'unknown')}`",
             f"Truncated: `{'yes' if truncated else 'no'}`",
             "",
             "```json",
             formatted,
             "```",
+            "",
+            "## 💰 Cost Estimate",
+            "",
+            f"- Estimated monthly cost: **${{ steps.cost.outputs.cost }}**",
           ]
 
           body = "\n".join(summary)
