@@ -10,6 +10,7 @@ permissions:
   contents: read
   pull-requests: write
 
+  
 env:
   RESOURCE_GROUP_NAME: arm-compare-rg
   LOCATION: eastus2
