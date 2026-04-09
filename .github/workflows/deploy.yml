@@ -11,6 +11,7 @@ permissions:
 
 env:
   RESOURCE_GROUP_NAME: arm-compare-rg
+  APP_SERVICE_SKU: F1
 
 jobs:
   deploy:
@@ -55,6 +56,7 @@ jobs:
             --resource-group "$RESOURCE_GROUP_NAME" \
             --name "armcompare-prod-${GITHUB_RUN_ID}" \
             --template-file infra/main.bicep \
+            --parameters skuName="$APP_SERVICE_SKU" \
             --output json > deployment-result.json
 
           # Persist deployment outputs for downstream steps.
