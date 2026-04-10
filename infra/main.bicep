@@ -14,6 +14,7 @@ param webAppName string = 'armcompare-${uniqueString(resourceGroup().id)}'
   'F1'
   'B1'
   'S1'
+  'P0v3'
   'P1v3'
 ])
 param skuName string = 'F1'

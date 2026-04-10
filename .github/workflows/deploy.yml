@@ -11,7 +11,7 @@ permissions:
 
 env:
   RESOURCE_GROUP_NAME: arm-compare-rg
-  APP_SERVICE_SKU: F1
+  APP_SERVICE_SKU: P0v3
 
 jobs:
   deploy:
