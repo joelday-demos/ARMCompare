@@ -11,6 +11,7 @@ permissions:
 
 env:
   RESOURCE_GROUP_NAME: arm-compare-rg
+  LOCATION: westcentralus
   APP_SERVICE_SKU: P0v3
 
 jobs:
@@ -56,6 +57,7 @@ jobs:
             --resource-group "$RESOURCE_GROUP_NAME" \
             --name "armcompare-prod-${GITHUB_RUN_ID}" \
             --template-file infra/main.bicep \
+            --parameters location="$LOCATION" \
             --parameters skuName="$APP_SERVICE_SKU" \
             --output json > deployment-result.json
 

@@ -11,13 +11,10 @@ param webAppName string = 'armcompare-${uniqueString(resourceGroup().id)}'
 
 @description('Pricing tier for the App Service plan.')
 @allowed([
-  'F1'
-  'B1'
-  'S1'
   'P0v3'
   'P1v3'
 ])
-param skuName string = 'F1'
+param skuName string = 'P0v3'
 
 var isLinuxPlan = skuName != 'F1'
 var planTier = skuName == 'F1'

@@ -12,7 +12,7 @@ permissions:
 
 env:
   RESOURCE_GROUP_NAME: arm-compare-rg
-  LOCATION: eastus2
+  LOCATION: westcentralus
 
 jobs:
   what-if:
@@ -53,6 +53,7 @@ jobs:
           az deployment group what-if \
             --resource-group "$RESOURCE_GROUP_NAME" \
             --template-file infra/main.bicep \
+            --parameters location="$LOCATION" \
             --result-format FullResourcePayloads \
             --no-pretty-print \
             --output json > whatif.json
