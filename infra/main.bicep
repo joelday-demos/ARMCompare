@@ -11,38 +11,53 @@ param webAppName string = 'armcompare-${uniqueString(resourceGroup().id)}'
 
 @description('Pricing tier for the App Service plan.')
 @allowed([
-  'B1'
-  'S1'
+  'P0v3'
   'P1v3'
 ])
-param skuName string = 'B1'
+param skuName string = 'P0v3'
+
+var isLinuxPlan = skuName != 'F1'
+var planTier = skuName == 'F1'
+  ? 'Free'
+  : (startsWith(skuName, 'P') ? 'PremiumV3' : (startsWith(skuName, 'S') ? 'Standard' : 'Basic'))
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location
   sku: {
     name: skuName
-    tier: startsWith(skuName, 'P') ? 'PremiumV3' : (startsWith(skuName, 'S') ? 'Standard' : 'Basic')
+    tier: planTier
     size: skuName
     capacity: 1
   }
-  kind: 'linux'
+  kind: isLinuxPlan ? 'linux' : 'app'
   properties: {
-    reserved: true
+    reserved: isLinuxPlan
   }
 }
 
 resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   name: webAppName
   location: location
-  kind: 'app,linux'
+  kind: isLinuxPlan ? 'app,linux' : 'app'
   properties: {
     serverFarmId: appServicePlan.id
-    siteConfig: {
-      linuxFxVersion: 'NODE|20-lts'
+    siteConfig: union({
       alwaysOn: false
       ftpsState: 'FtpsOnly'
       minTlsVersion: '1.2'
+      appSettings: [
+        {
+          name: 'WEBSITE_RUN_FROM_PACKAGE'
+          value: '1'
+        }
+        {
+          name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
+          value: 'false'
+        }
+      ]
+    }, isLinuxPlan ? {
+      linuxFxVersion: 'NODE|20-lts'
       appSettings: [
         {
           name: 'WEBSITE_RUN_FROM_PACKAGE'
@@ -57,7 +72,7 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
           value: '8080'
         }
       ]
-    }
+    } : {})
     httpsOnly: true
   }
 }
