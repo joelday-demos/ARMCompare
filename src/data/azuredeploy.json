@@ -1,0 +1,597 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "ELK Stack (Elasticsearch, Logstash, Kibana) deployment for Azure"
+  },
+  "parameters": {
+    "environment": {
+      "type": "string",
+      "allowedValues": ["dev", "test", "prod"],
+      "metadata": { "description": "Deployment environment" }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": { "description": "Azure region" }
+    },
+    "adminUsername": {
+      "type": "string",
+      "metadata": { "description": "Admin username for VMs" }
+    },
+    "adminPasswordOrKey": {
+      "type": "securestring",
+      "metadata": { "description": "Admin password or SSH public key" }
+    },
+    "authenticationType": {
+      "type": "string",
+      "defaultValue": "password",
+      "allowedValues": ["password", "sshPublicKey"],
+      "metadata": { "description": "Authentication type" }
+    },
+    "elasticsearchNodeCount": {
+      "type": "int",
+      "minValue": 1,
+      "maxValue": 10,
+      "metadata": { "description": "Number of Elasticsearch nodes" }
+    },
+    "logstashNodeCount": {
+      "type": "int",
+      "minValue": 1,
+      "maxValue": 5,
+      "metadata": { "description": "Number of Logstash nodes" }
+    },
+    "kibanaNodeCount": {
+      "type": "int",
+      "minValue": 1,
+      "maxValue": 5,
+      "metadata": { "description": "Number of Kibana nodes" }
+    },
+    "elasticsearchVmSize": {
+      "type": "string",
+      "metadata": { "description": "VM size for Elasticsearch" }
+    },
+    "logstashVmSize": {
+      "type": "string",
+      "metadata": { "description": "VM size for Logstash" }
+    },
+    "kibanaVmSize": {
+      "type": "string",
+      "metadata": { "description": "VM size for Kibana" }
+    },
+    "elasticsearchDataDiskSizeGB": {
+      "type": "int",
+      "metadata": { "description": "Data disk size for ES in GB" }
+    },
+    "elkVersion": {
+      "type": "string",
+      "defaultValue": "8.12.0",
+      "metadata": { "description": "ELK Stack version" }
+    }
+  },
+  "variables": {
+    "namePrefix": "[concat('elk-', parameters('environment'))]",
+    "vnetName": "[concat(variables('namePrefix'), '-vnet')]",
+    "nsgName": "[concat(variables('namePrefix'), '-nsg')]",
+    "vnetAddressPrefix": "10.0.0.0/16",
+    "elkSubnetPrefix": "10.0.1.0/24",
+    "managementSubnetPrefix": "10.0.2.0/24",
+    "elkSubnetName": "elk-subnet",
+    "managementSubnetName": "management-subnet",
+    "esAvsetName": "[concat(variables('namePrefix'), '-es-avset')]",
+    "kibanaPublicIpName": "[concat(variables('namePrefix'), '-kibana-pip')]",
+    "linuxConfiguration": {
+      "disablePasswordAuthentication": true,
+      "ssh": {
+        "publicKeys": [
+          {
+            "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+            "keyData": "[parameters('adminPasswordOrKey')]"
+          }
+        ]
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('nsgName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "Environment": "[parameters('environment')]",
+        "Project": "ELK-Stack",
+        "ManagedBy": "ARM"
+      },
+      "properties": {
+        "securityRules": [
+          {
+            "name": "Allow-SSH",
+            "properties": {
+              "priority": 1000,
+              "direction": "Inbound",
+              "access": "Allow",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*"
+            }
+          },
+          {
+            "name": "Allow-Kibana",
+            "properties": {
+              "priority": 1100,
+              "direction": "Inbound",
+              "access": "Allow",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "5601",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*"
+            }
+          },
+          {
+            "name": "Allow-Elasticsearch-API",
+            "properties": {
+              "priority": 1200,
+              "direction": "Inbound",
+              "access": "Allow",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "9200",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefix": "*"
+            }
+          },
+          {
+            "name": "Allow-Elasticsearch-Transport",
+            "properties": {
+              "priority": 1300,
+              "direction": "Inbound",
+              "access": "Allow",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "9300",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefix": "*"
+            }
+          },
+          {
+            "name": "Allow-Logstash-Beats",
+            "properties": {
+              "priority": 1400,
+              "direction": "Inbound",
+              "access": "Allow",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "5044",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*"
+            }
+          },
+          {
+            "name": "Allow-Logstash-HTTP",
+            "properties": {
+              "priority": 1500,
+              "direction": "Inbound",
+              "access": "Allow",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "5000",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('vnetName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+      ],
+      "tags": {
+        "Environment": "[parameters('environment')]",
+        "Project": "ELK-Stack",
+        "ManagedBy": "ARM"
+      },
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": ["[variables('vnetAddressPrefix')]"]
+        },
+        "subnets": [
+          {
+            "name": "[variables('elkSubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('elkSubnetPrefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+              }
+            }
+          },
+          {
+            "name": "[variables('managementSubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('managementSubnetPrefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/availabilitySets",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('esAvsetName')]",
+      "location": "[parameters('location')]",
+      "sku": { "name": "Aligned" },
+      "properties": {
+        "platformFaultDomainCount": 2,
+        "platformUpdateDomainCount": 5
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2023-09-01",
+      "name": "[concat(variables('namePrefix'), '-es-', copyIndex(), '-nic')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ],
+      "copy": {
+        "name": "esNicLoop",
+        "count": "[parameters('elasticsearchNodeCount')]"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('elkSubnetName'))]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2023-09-01",
+      "name": "[concat(variables('namePrefix'), '-es-', copyIndex())]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('namePrefix'), '-es-', copyIndex(), '-nic'))]",
+        "[resourceId('Microsoft.Compute/availabilitySets', variables('esAvsetName'))]"
+      ],
+      "copy": {
+        "name": "esVmLoop",
+        "count": "[parameters('elasticsearchNodeCount')]"
+      },
+      "tags": {
+        "Environment": "[parameters('environment')]",
+        "Project": "ELK-Stack",
+        "Role": "Elasticsearch"
+      },
+      "properties": {
+        "availabilitySet": {
+          "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('esAvsetName'))]"
+        },
+        "hardwareProfile": {
+          "vmSize": "[parameters('elasticsearchVmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('namePrefix'), '-es-', copyIndex())]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "adminPassword": "[if(equals(parameters('authenticationType'), 'password'), parameters('adminPasswordOrKey'), null())]",
+          "linuxConfiguration": "[if(equals(parameters('authenticationType'), 'sshPublicKey'), variables('linuxConfiguration'), null())]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "Canonical",
+            "offer": "0001-com-ubuntu-server-jammy",
+            "sku": "22_04-lts-gen2",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "[concat(variables('namePrefix'), '-es-', copyIndex(), '-osdisk')]",
+            "createOption": "FromImage",
+            "managedDisk": {
+              "storageAccountType": "Premium_LRS"
+            }
+          },
+          "dataDisks": [
+            {
+              "lun": 0,
+              "name": "[concat(variables('namePrefix'), '-es-', copyIndex(), '-datadisk')]",
+              "diskSizeGB": "[parameters('elasticsearchDataDiskSizeGB')]",
+              "createOption": "Empty",
+              "managedDisk": {
+                "storageAccountType": "Premium_LRS"
+              },
+              "caching": "ReadOnly"
+            }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('namePrefix'), '-es-', copyIndex(), '-nic'))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+          "bootDiagnostics": {
+            "enabled": true
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2023-09-01",
+      "name": "[concat(variables('namePrefix'), '-es-', copyIndex(), '/install-elasticsearch')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('namePrefix'), '-es-', copyIndex()))]"
+      ],
+      "copy": {
+        "name": "esExtLoop",
+        "count": "[parameters('elasticsearchNodeCount')]"
+      },
+      "properties": {
+        "publisher": "Microsoft.Azure.Extensions",
+        "type": "CustomScript",
+        "typeHandlerVersion": "2.1",
+        "autoUpgradeMinorVersion": true,
+        "protectedSettings": {
+          "commandToExecute": "[concat('bash -c \"apt-get update && apt-get install -y apt-transport-https openjdk-17-jre-headless && wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /usr/share/keyrings/elasticsearch-keyring.gpg && echo deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main > /etc/apt/sources.list.d/elastic-8.x.list && apt-get update && apt-get install -y elasticsearch && mkfs.ext4 /dev/disk/azure/scsi1/lun0 && mkdir -p /data/elasticsearch && mount /dev/disk/azure/scsi1/lun0 /data/elasticsearch && chown -R elasticsearch:elasticsearch /data/elasticsearch && echo /dev/disk/azure/scsi1/lun0 /data/elasticsearch ext4 defaults,nofail 0 2 >> /etc/fstab && printf ', 'cluster.name: ', variables('namePrefix'), '-cluster\\nnode.name: ', variables('namePrefix'), '-es-', copyIndex(), '\\npath.data: /data/elasticsearch\\nnetwork.host: 0.0.0.0\\nxpack.security.enabled: false\\nxpack.security.enrollment.enabled: false\\n', ' > /etc/elasticsearch/elasticsearch.yml && systemctl daemon-reload && systemctl enable elasticsearch && systemctl start elasticsearch\"')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2023-09-01",
+      "name": "[concat(variables('namePrefix'), '-ls-', copyIndex(), '-nic')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ],
+      "copy": {
+        "name": "lsNicLoop",
+        "count": "[parameters('logstashNodeCount')]"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('elkSubnetName'))]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2023-09-01",
+      "name": "[concat(variables('namePrefix'), '-ls-', copyIndex())]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('namePrefix'), '-ls-', copyIndex(), '-nic'))]"
+      ],
+      "copy": {
+        "name": "lsVmLoop",
+        "count": "[parameters('logstashNodeCount')]"
+      },
+      "tags": {
+        "Environment": "[parameters('environment')]",
+        "Project": "ELK-Stack",
+        "Role": "Logstash"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('logstashVmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('namePrefix'), '-ls-', copyIndex())]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "adminPassword": "[if(equals(parameters('authenticationType'), 'password'), parameters('adminPasswordOrKey'), null())]",
+          "linuxConfiguration": "[if(equals(parameters('authenticationType'), 'sshPublicKey'), variables('linuxConfiguration'), null())]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "Canonical",
+            "offer": "0001-com-ubuntu-server-jammy",
+            "sku": "22_04-lts-gen2",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "[concat(variables('namePrefix'), '-ls-', copyIndex(), '-osdisk')]",
+            "createOption": "FromImage",
+            "managedDisk": {
+              "storageAccountType": "Standard_LRS"
+            }
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('namePrefix'), '-ls-', copyIndex(), '-nic'))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+          "bootDiagnostics": { "enabled": true }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2023-09-01",
+      "name": "[concat(variables('namePrefix'), '-ls-', copyIndex(), '/install-logstash')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('namePrefix'), '-ls-', copyIndex()))]"
+      ],
+      "copy": {
+        "name": "lsExtLoop",
+        "count": "[parameters('logstashNodeCount')]"
+      },
+      "properties": {
+        "publisher": "Microsoft.Azure.Extensions",
+        "type": "CustomScript",
+        "typeHandlerVersion": "2.1",
+        "autoUpgradeMinorVersion": true,
+        "protectedSettings": {
+          "commandToExecute": "bash -c \"apt-get update && apt-get install -y apt-transport-https openjdk-17-jre-headless && wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /usr/share/keyrings/elasticsearch-keyring.gpg && echo 'deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main' > /etc/apt/sources.list.d/elastic-8.x.list && apt-get update && apt-get install -y logstash && printf 'input {\\n  beats {\\n    port => 5044\\n  }\\n  tcp {\\n    port => 5000\\n    codec => json\\n  }\\n}\\noutput {\\n  elasticsearch {\\n    hosts => [\\\"http://localhost:9200\\\"]\\n    index => \\\"logstash-%%{+YYYY.MM.dd}\\\"\\n  }\\n}\\n' > /etc/logstash/conf.d/elk-pipeline.conf && systemctl daemon-reload && systemctl enable logstash && systemctl start logstash\""
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('kibanaPublicIpName')]",
+      "location": "[parameters('location')]",
+      "sku": { "name": "Standard" },
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "dnsSettings": {
+          "domainNameLabel": "[concat(variables('namePrefix'), '-kibana')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2023-09-01",
+      "name": "[concat(variables('namePrefix'), '-kb-', copyIndex(), '-nic')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('kibanaPublicIpName'))]"
+      ],
+      "copy": {
+        "name": "kbNicLoop",
+        "count": "[parameters('kibanaNodeCount')]"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('elkSubnetName'))]"
+              },
+              "publicIPAddress": "[if(and(equals(parameters('kibanaNodeCount'), 1), equals(copyIndex(), 0)), createObject('id', resourceId('Microsoft.Network/publicIPAddresses', variables('kibanaPublicIpName'))), null())]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2023-09-01",
+      "name": "[concat(variables('namePrefix'), '-kb-', copyIndex())]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('namePrefix'), '-kb-', copyIndex(), '-nic'))]"
+      ],
+      "copy": {
+        "name": "kbVmLoop",
+        "count": "[parameters('kibanaNodeCount')]"
+      },
+      "tags": {
+        "Environment": "[parameters('environment')]",
+        "Project": "ELK-Stack",
+        "Role": "Kibana"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('kibanaVmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('namePrefix'), '-kb-', copyIndex())]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "adminPassword": "[if(equals(parameters('authenticationType'), 'password'), parameters('adminPasswordOrKey'), null())]",
+          "linuxConfiguration": "[if(equals(parameters('authenticationType'), 'sshPublicKey'), variables('linuxConfiguration'), null())]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "Canonical",
+            "offer": "0001-com-ubuntu-server-jammy",
+            "sku": "22_04-lts-gen2",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "[concat(variables('namePrefix'), '-kb-', copyIndex(), '-osdisk')]",
+            "createOption": "FromImage",
+            "managedDisk": {
+              "storageAccountType": "Standard_LRS"
+            }
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('namePrefix'), '-kb-', copyIndex(), '-nic'))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+          "bootDiagnostics": { "enabled": true }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2023-09-01",
+      "name": "[concat(variables('namePrefix'), '-kb-', copyIndex(), '/install-kibana')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('namePrefix'), '-kb-', copyIndex()))]"
+      ],
+      "copy": {
+        "name": "kbExtLoop",
+        "count": "[parameters('kibanaNodeCount')]"
+      },
+      "properties": {
+        "publisher": "Microsoft.Azure.Extensions",
+        "type": "CustomScript",
+        "typeHandlerVersion": "2.1",
+        "autoUpgradeMinorVersion": true,
+        "protectedSettings": {
+          "commandToExecute": "[concat('bash -c \"apt-get update && apt-get install -y apt-transport-https && wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /usr/share/keyrings/elasticsearch-keyring.gpg && echo deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main > /etc/apt/sources.list.d/elastic-8.x.list && apt-get update && apt-get install -y kibana && printf ', 'server.port: 5601\\nserver.host: 0.0.0.0\\nserver.name: ', variables('namePrefix'), '-kb-', copyIndex(), '\\nelasticsearch.hosts: [http://localhost:9200]\\n', ' > /etc/kibana/kibana.yml && systemctl daemon-reload && systemctl enable kibana && systemctl start kibana\"')]"
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "vnetId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+    },
+    "kibanaPublicIp": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('kibanaPublicIpName'))).ipAddress]"
+    },
+    "kibanaFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('kibanaPublicIpName'))).dnsSettings.fqdn]"
+    },
+    "kibanaUrl": {
+      "type": "string",
+      "value": "[concat('http://', reference(resourceId('Microsoft.Network/publicIPAddresses', variables('kibanaPublicIpName'))).dnsSettings.fqdn, ':5601')]"
+    }
+  }
+}
