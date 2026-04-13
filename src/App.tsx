@@ -2,7 +2,14 @@ import { useState, useCallback, useMemo } from 'react';
 import './App.css';
 
 import type { ArmTemplate, ParsedResource, DiffResult } from './types/arm';
-import { parseTemplate, resolveDependencies, validateTemplate } from './utils/armParser';
+import {
+  parseTemplate,
+  resolveDependencies,
+  validateTemplate,
+  extractParameterDefinitions,
+  buildEffectiveParameters,
+} from './utils/armParser';
+import type { ArmParameterDefinition } from './utils/armParser';
 import { parseBicepTemplate } from './utils/bicepParser';
 import { diffTemplates, buildDiffMap } from './utils/templateDiff';
 import FileUpload from './components/FileUpload';
@@ -20,12 +27,17 @@ interface LoadedTemplate {
   resources: ParsedResource[];
   edges: { from: string; to: string }[];
   sourceFormat: 'arm' | 'bicep';
+  parameterDefinitions?: ArmParameterDefinition[];
 }
+
+type ParameterValueMap = Record<string, unknown>;
 
 function App() {
   const [mode, setMode] = useState<ViewMode>('single');
   const [template1, setTemplate1] = useState<LoadedTemplate | null>(null);
   const [template2, setTemplate2] = useState<LoadedTemplate | null>(null);
+  const [parameterOverrides1, setParameterOverrides1] = useState<ParameterValueMap>({});
+  const [parameterOverrides2, setParameterOverrides2] = useState<ParameterValueMap>({});
   const [error, setError] = useState<string | null>(null);
   const [controlsCollapsed, setControlsCollapsed] = useState(false);
 
@@ -70,6 +82,7 @@ function App() {
           resources,
           edges,
           sourceFormat: 'arm',
+          parameterDefinitions: extractParameterDefinitions(parsed),
         };
       } catch {
         setError(`Failed to parse "${fileName}". Upload a valid ARM JSON or .bicep file.`);
@@ -82,7 +95,10 @@ function App() {
   const handleTemplate1 = useCallback(
     (content: string, fileName: string) => {
       const loaded = loadTemplate(content, fileName);
-      if (loaded) setTemplate1(loaded);
+      if (loaded) {
+        setTemplate1(loaded);
+        setParameterOverrides1({});
+      }
     },
     [loadTemplate]
   );
@@ -90,10 +106,133 @@ function App() {
   const handleTemplate2 = useCallback(
     (content: string, fileName: string) => {
       const loaded = loadTemplate(content, fileName);
-      if (loaded) setTemplate2(loaded);
+      if (loaded) {
+        setTemplate2(loaded);
+        setParameterOverrides2({});
+      }
     },
     [loadTemplate]
   );
+
+  const renderedTemplate1 = useMemo(() => {
+    if (!template1 || template1.sourceFormat !== 'arm' || !template1.template) return template1;
+    const resources = parseTemplate(template1.template, { parameterValues: parameterOverrides1 });
+    const edges = resolveDependencies(resources);
+    return {
+      ...template1,
+      resources,
+      edges,
+    };
+  }, [template1, parameterOverrides1]);
+
+  const renderedTemplate2 = useMemo(() => {
+    if (!template2 || template2.sourceFormat !== 'arm' || !template2.template) return template2;
+    const resources = parseTemplate(template2.template, { parameterValues: parameterOverrides2 });
+    const edges = resolveDependencies(resources);
+    return {
+      ...template2,
+      resources,
+      edges,
+    };
+  }, [template2, parameterOverrides2]);
+
+  const effectiveParams1 = useMemo(() => {
+    if (!template1?.template || template1.sourceFormat !== 'arm') return {} as ParameterValueMap;
+    return buildEffectiveParameters(template1.template, parameterOverrides1);
+  }, [template1, parameterOverrides1]);
+
+  const effectiveParams2 = useMemo(() => {
+    if (!template2?.template || template2.sourceFormat !== 'arm') return {} as ParameterValueMap;
+    return buildEffectiveParameters(template2.template, parameterOverrides2);
+  }, [template2, parameterOverrides2]);
+
+  const castParameterValue = useCallback((rawValue: string, definition: ArmParameterDefinition): unknown => {
+    const type = definition.type.toLowerCase();
+
+    if (type === 'int') {
+      const parsed = Number(rawValue);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    if (type === 'bool' || type === 'boolean') {
+      return rawValue === 'true';
+    }
+
+    return rawValue;
+  }, []);
+
+  const renderParameterControls = useCallback((
+    label: string,
+    loaded: LoadedTemplate | null,
+    effectiveValues: ParameterValueMap,
+    setOverrides: React.Dispatch<React.SetStateAction<ParameterValueMap>>,
+    castValue: (raw: string, definition: ArmParameterDefinition) => unknown,
+  ) => {
+    if (!loaded || loaded.sourceFormat !== 'arm' || !loaded.parameterDefinitions || loaded.parameterDefinitions.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="parameter-controls-card">
+        <div className="parameter-controls-title">{label}: Parameter Values</div>
+        <div className="parameter-controls-grid">
+          {loaded.parameterDefinitions.map((parameter) => {
+            const value = effectiveValues[parameter.name];
+            const allowedValues = parameter.allowedValues ?? [];
+            const type = parameter.type.toLowerCase();
+
+            return (
+              <label key={parameter.name} className="parameter-control">
+                <span className="parameter-label">{parameter.name}</span>
+                {parameter.description && <span className="parameter-description">{parameter.description}</span>}
+
+                {allowedValues.length > 0 ? (
+                  <select
+                    className="parameter-input"
+                    value={String(value ?? '')}
+                    onChange={(event) => {
+                      const nextValue = castValue(event.target.value, parameter);
+                      setOverrides((prev) => ({ ...prev, [parameter.name]: nextValue }));
+                    }}
+                  >
+                    {allowedValues.map((optionValue, index) => (
+                      <option key={`${parameter.name}-${index}`} value={String(optionValue)}>
+                        {String(optionValue)}
+                      </option>
+                    ))}
+                  </select>
+                ) : type === 'bool' || type === 'boolean' ? (
+                  <select
+                    className="parameter-input"
+                    value={String(Boolean(value))}
+                    onChange={(event) => {
+                      const nextValue = castValue(event.target.value, parameter);
+                      setOverrides((prev) => ({ ...prev, [parameter.name]: nextValue }));
+                    }}
+                  >
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                ) : (
+                  <input
+                    className="parameter-input"
+                    type={type === 'int' ? 'number' : 'text'}
+                    value={value === undefined || value === null ? '' : String(value)}
+                    min={parameter.minValue}
+                    max={parameter.maxValue}
+                    onChange={(event) => {
+                      const nextValue = castValue(event.target.value, parameter);
+                      setOverrides((prev) => ({ ...prev, [parameter.name]: nextValue }));
+                    }}
+                  />
+                )}
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }, []);
 
   const loadSample = useCallback(
     (index: number, target: 1 | 2) => {
@@ -108,21 +247,21 @@ function App() {
 
   // Comparison results
   const { diffs, diffMap, combinedResources, combinedEdges } = useMemo(() => {
-    if (mode !== 'compare' || !template1 || !template2) {
+    if (mode !== 'compare' || !renderedTemplate1 || !renderedTemplate2) {
       return { diffs: [] as DiffResult[], diffMap: undefined, combinedResources: [] as ParsedResource[], combinedEdges: [] as { from: string; to: string }[] };
     }
 
-    const diffs = diffTemplates(template1.resources, template2.resources);
+    const diffs = diffTemplates(renderedTemplate1.resources, renderedTemplate2.resources);
     const diffMap = buildDiffMap(diffs);
 
     const resourceMap = new Map<string, ParsedResource>();
-    for (const r of template1.resources) resourceMap.set(r.id, r);
-    for (const r of template2.resources) resourceMap.set(r.id, r);
+    for (const r of renderedTemplate1.resources) resourceMap.set(r.id, r);
+    for (const r of renderedTemplate2.resources) resourceMap.set(r.id, r);
     const combinedResources = [...resourceMap.values()];
 
     const edgeSet = new Set<string>();
     const combinedEdges: { from: string; to: string }[] = [];
-    for (const e of [...template1.edges, ...template2.edges]) {
+    for (const e of [...renderedTemplate1.edges, ...renderedTemplate2.edges]) {
       const key = `${e.from}|${e.to}`;
       if (!edgeSet.has(key)) {
         edgeSet.add(key);
@@ -131,10 +270,10 @@ function App() {
     }
 
     return { diffs, diffMap, combinedResources, combinedEdges };
-  }, [mode, template1, template2]);
+  }, [mode, renderedTemplate1, renderedTemplate2]);
 
-  const activeTemplate = template1;
-  const showGraph = mode === 'single' ? !!activeTemplate : !!(template1 && template2);
+  const activeTemplate = renderedTemplate1;
+  const showGraph = mode === 'single' ? !!activeTemplate : !!(renderedTemplate1 && renderedTemplate2);
   const isTopCollapsed = controlsCollapsed && showGraph;
 
   return (
@@ -205,27 +344,50 @@ function App() {
                 label={mode === 'compare' ? 'Base Template (left)' : 'Template (ARM/Bicep)'}
                 onFileLoaded={handleTemplate1}
                 accept=".json,.bicep"
-                fileName={template1?.fileName}
-                fileTypeLabel={template1 ? template1.sourceFormat.toUpperCase() : undefined}
-                onClear={() => setTemplate1(null)}
+                fileName={renderedTemplate1?.fileName}
+                fileTypeLabel={renderedTemplate1 ? renderedTemplate1.sourceFormat.toUpperCase() : undefined}
+                onClear={() => {
+                  setTemplate1(null);
+                  setParameterOverrides1({});
+                }}
               />
               {mode === 'compare' && (
                 <FileUpload
                   label="Updated Template (right)"
                   onFileLoaded={handleTemplate2}
                   accept=".json,.bicep"
-                  fileName={template2?.fileName}
-                  fileTypeLabel={template2 ? template2.sourceFormat.toUpperCase() : undefined}
-                  onClear={() => setTemplate2(null)}
+                  fileName={renderedTemplate2?.fileName}
+                  fileTypeLabel={renderedTemplate2 ? renderedTemplate2.sourceFormat.toUpperCase() : undefined}
+                  onClear={() => {
+                    setTemplate2(null);
+                    setParameterOverrides2({});
+                  }}
                 />
               )}
             </div>
 
-            {mode === 'compare' && template1 && template2 && template1.sourceFormat !== template2.sourceFormat && (
+            {mode === 'compare' && renderedTemplate1 && renderedTemplate2 && renderedTemplate1.sourceFormat !== renderedTemplate2.sourceFormat && (
               <div className="comparison-mode-note">
-                Comparing across formats: {template1.sourceFormat.toUpperCase()} vs {template2.sourceFormat.toUpperCase()}
+                Comparing across formats: {renderedTemplate1.sourceFormat.toUpperCase()} vs {renderedTemplate2.sourceFormat.toUpperCase()}
               </div>
             )}
+
+            <div className={`parameter-controls-wrap ${mode === 'compare' ? 'compare' : ''}`}>
+              {renderParameterControls(
+                mode === 'compare' ? 'Base Template' : 'Template',
+                renderedTemplate1,
+                effectiveParams1,
+                setParameterOverrides1,
+                castParameterValue,
+              )}
+              {mode === 'compare' && renderParameterControls(
+                'Updated Template',
+                renderedTemplate2,
+                effectiveParams2,
+                setParameterOverrides2,
+                castParameterValue,
+              )}
+            </div>
 
             {!showGraph && (
               <div className="samples-section">
@@ -235,7 +397,7 @@ function App() {
                     <button
                       key={i}
                       className="sample-btn"
-                      onClick={() => loadSample(i, !template1 ? 1 : 2)}
+                      onClick={() => loadSample(i, !renderedTemplate1 ? 1 : 2)}
                     >
                       {sample.name}
                       <span className="sample-desc">{sample.description}</span>
@@ -245,18 +407,18 @@ function App() {
               </div>
             )}
 
-            {(template1 || (mode === 'compare' && template2)) && (
+            {(renderedTemplate1 || (mode === 'compare' && renderedTemplate2)) && (
               <div className={`raw-templates-grid ${mode === 'compare' ? 'compare' : ''}`}>
-                {template1 && (
+                {renderedTemplate1 && (
                   <RawTemplateViewer
-                    title={mode === 'compare' ? `Base: ${template1.fileName}` : template1.fileName}
-                    rawText={template1.rawText}
+                    title={mode === 'compare' ? `Base: ${renderedTemplate1.fileName}` : renderedTemplate1.fileName}
+                    rawText={renderedTemplate1.rawText}
                   />
                 )}
-                {mode === 'compare' && template2 && (
+                {mode === 'compare' && renderedTemplate2 && (
                   <RawTemplateViewer
-                    title={`Updated: ${template2.fileName}`}
-                    rawText={template2.rawText}
+                    title={`Updated: ${renderedTemplate2.fileName}`}
+                    rawText={renderedTemplate2.rawText}
                   />
                 )}
               </div>
@@ -277,12 +439,12 @@ function App() {
             />
           )}
 
-          {mode === 'compare' && template1 && template2 && (
+          {mode === 'compare' && renderedTemplate1 && renderedTemplate2 && (
             <DependencyGraph
               resources={combinedResources}
               edges={combinedEdges}
               diffMap={diffMap}
-              title={`${template1.fileName}  →  ${template2.fileName}`}
+              title={`${renderedTemplate1.fileName}  →  ${renderedTemplate2.fileName}`}
             />
           )}
         </div>

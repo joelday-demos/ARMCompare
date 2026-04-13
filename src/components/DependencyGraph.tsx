@@ -99,6 +99,7 @@ export default function DependencyGraph({
   } | null>(null);
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
+  const [scrollZoomEnabled, setScrollZoomEnabled] = useState(true);
   const [panStart, setPanStart] = useState<{
     pointerX: number;
     pointerY: number;
@@ -291,101 +292,118 @@ export default function DependencyGraph({
       </div>
 
       <div className="graph-flow">
-        <div
-          className={`tree-canvas-wrap ${panStart ? 'panning' : ''}`}
-          onWheel={(event) => {
-            event.preventDefault();
-            const delta = event.deltaY > 0 ? -0.1 : 0.1;
-            setZoom(scale + delta);
-          }}
-          onMouseDown={(event) => {
-            if (event.button !== 0) return;
-            setPanStart({
-              pointerX: event.clientX,
-              pointerY: event.clientY,
-              originX: translate.x,
-              originY: translate.y,
-            });
-          }}
-          onMouseMove={(event) => {
-            if (!panStart) return;
-            setTranslate({
-              x: panStart.originX + (event.clientX - panStart.pointerX),
-              y: panStart.originY + (event.clientY - panStart.pointerY),
-            });
-          }}
-          onMouseUp={() => setPanStart(null)}
-          onMouseLeave={() => setPanStart(null)}
-        >
-          <div className="tree-overlay-controls">
-            <div className="tree-zoom-controls">
-              <button type="button" onClick={zoomIn} aria-label="Zoom in">+</button>
-              <button type="button" onClick={zoomOut} aria-label="Zoom out">-</button>
-              <button type="button" onClick={resetView} aria-label="Reset tree view">Reset</button>
-            </div>
-
-            <div className="tree-link-legend" aria-label="Tree dependency legend">
-              <div className="tree-link-legend-row">
-                <span className="tree-link-sample" />
-                <span>Primary tree dependency</span>
-              </div>
-              <div className="tree-link-legend-row">
-                <span className="tree-link-sample tree-link-sample-extra" />
-                <span>Additional dependency edge</span>
-              </div>
-            </div>
+        <div className="tree-viewport-shell">
+          <div className="tree-viewport-header">
+            <span className="tree-viewport-hint">
+              Scroll in this box to zoom. Drag to pan.
+            </span>
+            <label className="tree-zoom-toggle">
+              <input
+                type="checkbox"
+                checked={scrollZoomEnabled}
+                onChange={(event) => setScrollZoomEnabled(event.target.checked)}
+              />
+              Scroll to zoom
+            </label>
           </div>
 
-          <svg
-            className="tree-canvas"
-            width={Math.max(layout.width + 320, 1200)}
-            height={Math.max(layout.height + 220, 700)}
-            role="img"
-            aria-label="Resource dependency tree"
+          <div
+            className={`tree-canvas-wrap ${panStart ? 'panning' : ''}`}
+            onWheel={(event) => {
+              if (!scrollZoomEnabled) return;
+              event.preventDefault();
+              const delta = event.deltaY > 0 ? -0.1 : 0.1;
+              setZoom(scale + delta);
+            }}
+            onMouseDown={(event) => {
+              if (event.button !== 0) return;
+              setPanStart({
+                pointerX: event.clientX,
+                pointerY: event.clientY,
+                originX: translate.x,
+                originY: translate.y,
+              });
+            }}
+            onMouseMove={(event) => {
+              if (!panStart) return;
+              setTranslate({
+                x: panStart.originX + (event.clientX - panStart.pointerX),
+                y: panStart.originY + (event.clientY - panStart.pointerY),
+              });
+            }}
+            onMouseUp={() => setPanStart(null)}
+            onMouseLeave={() => setPanStart(null)}
           >
-            <g transform={`translate(${translate.x + 32}, ${translate.y + 22}) scale(${scale})`}>
-              <g>
-                {layout.links.map((link, index) => (
-                  <path
-                    key={`${link.sourceId}-${link.targetId}-${index}`}
-                    d={linkPath(link.sourceX, link.sourceY, link.targetX, link.targetY)}
-                    className={link.isExtra ? 'tree-link tree-link-extra' : 'tree-link'}
-                  />
-                ))}
-              </g>
+            <div className="tree-overlay-controls">
+              <div className="tree-zoom-controls">
+                <button type="button" onClick={zoomIn} aria-label="Zoom in">+</button>
+                <button type="button" onClick={zoomOut} aria-label="Zoom out">-</button>
+                <button type="button" onClick={resetView} aria-label="Reset tree view">Reset</button>
+              </div>
 
-              <g>
-                {layout.nodes.map((node) => (
-                  <g
-                    key={node.id}
-                    transform={`translate(${node.y}, ${node.x})`}
-                    className={`tree-node ${getStatusClass(node.diff)}`}
-                    onClick={() =>
-                      setSelectedResource({
-                        resource: node.resource,
-                        diff: node.diff,
-                      })
-                    }
-                  >
-                    <rect width={NODE_WIDTH} height={NODE_HEIGHT} rx={12} ry={12} className="tree-node-card" />
-                    <image href={node.iconUrl} x={12} y={12} width={32} height={32} />
-                    <text x={52} y={28} className="tree-node-name">
-                      <title>{node.resource.name}</title>
-                      {truncateLabel(node.resource.shortName, 28)}
-                    </text>
-                    <text x={52} y={46} className="tree-node-type">
-                      <title>{node.resource.shortType}</title>
-                      {truncateLabel(node.resource.shortType, 26)}
-                    </text>
-                    <text x={12} y={64} className="tree-node-provider">
-                      <title>{node.resource.type}</title>
-                      {truncateLabel(node.resource.type.split('/').slice(0, -1).join('/'), 38)}
-                    </text>
-                  </g>
-                ))}
+              <div className="tree-link-legend" aria-label="Tree dependency legend">
+                <div className="tree-link-legend-row">
+                  <span className="tree-link-sample" />
+                  <span>Primary tree dependency</span>
+                </div>
+                <div className="tree-link-legend-row">
+                  <span className="tree-link-sample tree-link-sample-extra" />
+                  <span>Additional dependency edge</span>
+                </div>
+              </div>
+            </div>
+
+            <svg
+              className="tree-canvas"
+              width={Math.max(layout.width + 320, 1200)}
+              height={Math.max(layout.height + 220, 700)}
+              role="img"
+              aria-label="Resource dependency tree"
+            >
+              <g transform={`translate(${translate.x + 32}, ${translate.y + 22}) scale(${scale})`}>
+                <g>
+                  {layout.links.map((link, index) => (
+                    <path
+                      key={`${link.sourceId}-${link.targetId}-${index}`}
+                      d={linkPath(link.sourceX, link.sourceY, link.targetX, link.targetY)}
+                      className={link.isExtra ? 'tree-link tree-link-extra' : 'tree-link'}
+                    />
+                  ))}
+                </g>
+
+                <g>
+                  {layout.nodes.map((node) => (
+                    <g
+                      key={node.id}
+                      transform={`translate(${node.y}, ${node.x})`}
+                      className={`tree-node ${getStatusClass(node.diff)}`}
+                      onClick={() =>
+                        setSelectedResource({
+                          resource: node.resource,
+                          diff: node.diff,
+                        })
+                      }
+                    >
+                      <rect width={NODE_WIDTH} height={NODE_HEIGHT} rx={12} ry={12} className="tree-node-card" />
+                      <image href={node.iconUrl} x={12} y={12} width={32} height={32} />
+                      <text x={52} y={28} className="tree-node-name">
+                        <title>{node.resource.name}</title>
+                        {truncateLabel(node.resource.shortName, 28)}
+                      </text>
+                      <text x={52} y={46} className="tree-node-type">
+                        <title>{node.resource.shortType}</title>
+                        {truncateLabel(node.resource.shortType, 26)}
+                      </text>
+                      <text x={12} y={64} className="tree-node-provider">
+                        <title>{node.resource.type}</title>
+                        {truncateLabel(node.resource.type.split('/').slice(0, -1).join('/'), 38)}
+                      </text>
+                    </g>
+                  ))}
+                </g>
               </g>
-            </g>
-          </svg>
+            </svg>
+          </div>
         </div>
       </div>
 
